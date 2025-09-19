@@ -1,0 +1,441 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hierarchical Network Map (Demo)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <style>
+    body, html { margin:0; height:100%; }
+    #map { height:100vh; width:100%; }
+
+    .pulse { border-radius:50%; width:18px; height:18px; box-shadow:0 0 6px rgba(255,0,0,0.9); animation: pulse 1.4s infinite;}
+    @keyframes pulse {0%{transform:scale(0.85);opacity:.8}50%{transform:scale(1.2);opacity:.3}100%{transform:scale(0.85);opacity:.8}}
+
+    /* legend and breadcrumb --- */
+    #legend, #breadcrumb {
+      position: absolute;
+      z-index: 1000;
+      background: rgba(255,255,255,0.9);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    #legend { bottom: 12px; left: 12px; }
+    #breadcrumb { top: 70px; left: 10px; }
+
+    /* pulse border for suspicious markers */
+    .leaflet-interactive.suspicious {
+      animation: pulseStroke 1.2s infinite;
+    }
+    @keyframes pulseStroke {
+      0%   { stroke-opacity: 1;   stroke-width: 1px; }
+      50%  { stroke-opacity: 0.35; stroke-width: 5px; }
+      100% { stroke-opacity: 1;   stroke-width: 1px; }
+    }
+    
+  </style>
+</head>
+<body>
+
+  <!-- Bootstrap container -->
+  <div class="container-fluid p-0">
+    <div class="d-flex" style="height: 100vh;">
+      <!-- Sidebar for filters -->
+      <div class="bg-light p-3 border-end" style="width: 320px; min-width: 300px;">
+        <h5 class="mb-3">Controls</h5>
+
+        <div class="mb-3">
+          <label class="form-label">Level</label>
+          <select id="level" class="form-select form-select-sm">
+            <option value="continent">Continents</option>
+            <option value="region">Regions</option>
+            <option value="country">Countries</option>
+            <option value="city">Cities</option>
+            <option value="point">Points</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Time</label>
+          <select id="minutes" class="form-select form-select-sm">
+            <option value="5">5m</option>
+            <option value="15" selected>15m</option>
+            <option value="60">60m</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Show</label>
+          <select id="status" class="form-select form-select-sm">
+            <option value="all" selected>All</option>
+            <option value="allowed">Allowed</option>
+            <option value="blocked">Blocked</option>
+          </select>
+          
+        </div>
+
+        <div class="mb-3 form-check">
+          <!-- --- suspicious only filter --- -->
+          <input type="checkbox" class="form-check-input" id="suspiciousOnly">
+          <label class="form-check-label" for="suspiciousOnly">Suspicious only</label>
+          
+        </div>
+
+        <button id="refresh" class="btn btn-primary btn-sm">Refresh Now</button>
+
+        <div class="mt-3">
+          <small class="text-muted">Click a bubble to drill down. Use zoom to explore.</small>
+        </div>
+
+        <!-- --- Recent Alerts Panel --- -->
+        <div class="card" id="alertsPanel">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span>Recent Alerts</span>
+            <!-- Mode switch: Raw feed vs Aggregate by IP -->
+            <select id="alertMode" class="form-select form-select-sm w-auto">
+              <option value="raw" selected>Raw</option>
+              <option value="aggregate">By IP</option>
+            </select>
+          </div>
+        
+          <div class="card-body">
+            <!-- Optional IP filter -->
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text">IP</span>
+              <input id="ipFilter" type="text" class="form-control" placeholder="e.g. 203.0.113.5">
+              <button id="applyIp" class="btn btn-outline-secondary">Apply</button>
+              <button id="clearIp" class="btn btn-outline-secondary">Clear</button>
+            </div>
+        
+            <!-- Scrollable table -->
+            <div style="max-height: 350px; overflow-y: auto;">
+              <table class="table table-striped table-hover table-sm mb-0" id="alertsTable">
+                <thead class="table-dark">
+                  <tr id="alertsHeader">
+                    <!-- Default (raw) header -->
+                    <th>Time</th>
+                    <th>IP</th>
+                    <th>Status</th>
+                    <th>City</th>
+                    <th>Campus</th>
+                    <th>Repeat</th>
+                    <th>⚠️</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- rows injected by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+
+
+        
+      </div>
+      
+
+      <!-- Main map area -->
+      <div class="flex-grow-1 position-relative">
+        <div id="map"></div>
+        <!-- --- legend + breadcrumb placeholders --- -->
+        <div id="breadcrumb"></div>
+        <div id="legend">
+          <b>Campus Legend</b><br>
+          <span style="color:#377eb8">●</span> DeLand<br>
+          <span style="color:#4daf4a">●</span> Gulfport (Law)<br>
+          <span style="color:#984ea3">●</span> Tampa<br>
+          <span style="color:#ff7f00">●</span> Celebration<br>
+          <span style="color:#999999">●</span> Unknown
+        </div>
+        
+      </div>
+    </div>
+    
+  </div>
+
+
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+
+  <script>
+    const MAP_CENTER = [29.0283, -81.3031]; // DeLand focus
+    const MAP_START_ZOOM = 3;
+    const SERVER = ""; // same origin, server serves map.html; endpoints at /data and /ingest
+    let map = L.map('map').setView(MAP_CENTER, MAP_START_ZOOM);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
+
+    // layer group to hold current bubbles
+    let bubbleLayer = L.layerGroup().addTo(map);
+    // currently selected drill key path stack (not persisted server-side)
+    let currentPath = [];
+
+    // ---  breadcrumb helper ---
+    function setBreadcrumb(text) {
+      document.getElementById("breadcrumb").innerText = text || "";
+    }
+    
+
+    // utility for radius scaling
+    function radiusForCount(count, level){
+      const base = Math.log(count + 1);
+      const scale = {"continent": 40, "region": 25, "country": 18, "city": 12, "point": 6}[level] || 10;
+      return Math.min(scale * base, scale * 3 + 10);
+    }
+    function colorForAllowedRatio(r){
+      // r in [0..1], 1 -> green, 0 -> red
+      const g = Math.round(200 * r);
+      const rcol = Math.round(200 * (1-r));
+      return `rgb(${rcol},${g},50)`;
+    }
+
+    async function loadData(level, minutes, status){
+      const url = `/data?level=${level}&minutes=${minutes}&status=${status}&top_k=200`;
+      try{
+        const res = await fetch(url);
+        const gj = await res.json();
+        return gj;
+      }catch(e){
+        console.error("data load error", e);
+        return null;
+      }
+    }
+
+    function clearBubbles(){
+      bubbleLayer.clearLayers();
+    }
+
+    function bindDrillOnFeature(feature, level){
+      // clicking a feature will set the next level and re-query
+      const props = feature.properties;
+      const key = props.label;
+      return function(){
+        // figure next level
+        const order = ["continent","region","country","city","point"];
+        const idx = order.indexOf(level);
+        if(idx < 0 || idx === order.length-1) return;
+        const nextLevel = order[idx+1];
+
+        // Optionally pan/zoom to the feature's coordinates
+        const [lon, lat] = feature.geometry.coordinates;
+        map.setView([lat, lon], Math.min(map.getZoom()+2, 12));
+
+        // --- ADDED breadcrumb update ---
+        if (!window._crumbs) window._crumbs = [];
+        window._crumbs.push(key);
+        setBreadcrumb(window._crumbs.join(" > "));
+        // --- END ADD ---
+
+        // set UI level to nextLevel and load it
+        document.getElementById("level").value = nextLevel;
+        refresh();
+      }
+    }
+    function setAlertsHeader(mode) {
+    const header = document.getElementById('alertsHeader');
+    if (!header) return;
+    if (mode === 'aggregate') {
+      header.innerHTML = `
+        <th>IP</th>
+        <th>City</th>
+        <th>Attempts</th>
+        <th>Blocked</th>
+        <th>Allowed</th>
+        <th>Last Seen</th>
+        <th>⚠️</th>
+      `;
+    } else {
+      header.innerHTML = `
+        <th>Time</th>
+        <th>IP</th>
+        <th>Status</th>
+        <th>City</th>
+        <th>Campus</th>
+        <th>Repeat</th>
+        <th>⚠️</th>
+      `;
+    }
+  }
+
+  // Fetch alerts from backend
+  async function loadAlerts() {
+    const minutesEl = document.getElementById('minutes'); // reuse your existing time filter
+    const minutes = minutesEl ? minutesEl.value : 15;
+
+    const mode = (document.getElementById('alertMode')?.value || 'raw'); // raw | aggregate
+    const ip = (document.getElementById('ipFilter')?.value || '').trim();
+
+    setAlertsHeader(mode);
+
+    let url = `/alerts?minutes=${encodeURIComponent(minutes)}&limit=50`;
+    if (mode === 'aggregate') url += `&aggregate=ip`;
+    if (ip) url += `&ip=${encodeURIComponent(ip)}`;
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      renderAlerts(data.alerts || [], mode);
+    } catch (e) {
+      console.error('alerts load error', e);
+      renderAlerts([], mode);
+    }
+  }
+
+  // Render rows into the table
+  function renderAlerts(alerts, mode) {
+    const tbody = document.querySelector('#alertsTable tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    alerts.forEach(a => {
+      const tr = document.createElement('tr');
+
+      // Highlight suspicious rows
+      if (a.suspicious) tr.classList.add('table-danger');
+
+      if (mode === 'aggregate') {
+        tr.innerHTML = `
+          <td>${a.ip || ''}</td>
+          <td>${a.city || ''}</td>
+          <td>${a.count ?? 0}</td>
+          <td>${a.blocked ?? 0}</td>
+          <td>${a.allowed ?? 0}</td>
+          <td>${a.last_seen ? new Date(a.last_seen).toLocaleTimeString() : ''}</td>
+          <td>${a.suspicious ? '⚠️' : ''}</td>
+        `;
+      } else {
+        tr.innerHTML = `
+          <td>${a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : ''}</td>
+          <td>${a.ip || ''}</td>
+          <td>${a.status || ''}</td>
+          <td>${a.city || ''}</td>
+          <td>${a.campus || 'Unknown'}</td>
+          <td>${a.repeat_count ?? 0}</td>
+          <td>${a.suspicious ? '⚠️' : ''}</td>
+        `;
+      }
+
+      // Clicking a row zooms map (if you have `map` from Leaflet)
+      tr.addEventListener('click', () => {
+        if (a.lat && a.lon && typeof map !== 'undefined') {
+          map.setView([a.lat, a.lon], 8);
+        }
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Wire up the panel controls
+  function initAlertsPanel() {
+    document.getElementById('alertMode')?.addEventListener('change', loadAlerts);
+    document.getElementById('applyIp')?.addEventListener('click', loadAlerts);
+    document.getElementById('clearIp')?.addEventListener('click', () => {
+      const ipInput = document.getElementById('ipFilter');
+      if (ipInput) ipInput.value = '';
+      loadAlerts();
+    });
+
+    // If your time dropdown changes, refresh alerts too
+    document.getElementById('minutes')?.addEventListener('change', loadAlerts);
+
+    // Start polling (same cadence as your map)
+    setInterval(loadAlerts, 5000);
+    loadAlerts(); // initial
+  }
+
+  // Call this once your page is ready (after map init)
+  initAlertsPanel();
+
+    function renderGeoJSON(gj){
+      clearBubbles();
+      if(!gj || !gj.features) return;
+      gj.features.forEach(f => {
+        const lon = f.geometry.coordinates[0];
+        const lat = f.geometry.coordinates[1];
+        const p = f.properties;
+        const count = p.count || 1;
+        const allowed_ratio = p.allowed_ratio || 0;
+        const col = colorForAllowedRatio(allowed_ratio);
+        const rad = radiusForCount(count, gj.meta.level);
+        const label = p.label || "";
+
+        // build popup
+        const popupHtml = `<b>${label}</b><br>Count: ${p.count}<br>Allowed: ${p.allowed} Blocked: ${p.blocked}`;
+        const suspicious = f.properties.suspicious;
+        const borderColor = suspicious ? "#ff0000" : "#333";
+        const borderWeight = suspicious ? 3 : 1;
+
+        const circle = L.circleMarker([lat, lon], {
+          radius: rad,
+          color: borderColor,
+          fillColor: f.properties.color || "#ccc", // campus color from server
+          fillOpacity: 0.7,
+          weight: borderWeight
+        }).bindPopup(`
+          <b>${p.label}</b><br>
+          Campus: ${p.campus}<br>
+          Count: ${p.count} | Blocked: ${p.blocked} | Allowed: ${p.allowed}<br>
+          Suspicious Score: ${p.suspicious_score}<br>
+          Top IPs:<br>${p.top_ips.join("<br>")}
+        `);
+
+        circle.on('click', bindDrillOnFeature(f, gj.meta.level));
+
+        // --- suspicious pulse ---
+        circle.on('add', () => {
+          const el = circle.getElement && circle.getElement();
+          if (el && suspicious) el.classList.add('suspicious');
+        });
+        
+
+        circle.addTo(bubbleLayer);
+      });
+    }
+
+    async function refresh(){
+      const level = document.getElementById("level").value;
+
+      // breadcrumb reset
+      if (level === "continent") { window._crumbs = []; setBreadcrumb(""); }
+      
+
+      const minutes = document.getElementById("minutes").value;
+      const status = document.getElementById("status").value;
+      const gj = await loadData(level, minutes, status);
+
+      //  suspicious-only filter 
+      if (document.getElementById("suspiciousOnly").checked && gj && gj.features) {
+        gj.features = gj.features.filter(f => f.properties && f.properties.suspicious);
+      }
+      
+
+      renderGeoJSON(gj);
+    }
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+    // periodic polling to simulate live
+    setInterval(refresh, 5000);
+
+    // initial load
+    refresh();
+  </script>
+</body>
+</html>
+
+
